@@ -1,2 +1,2 @@
 # RobertJirsaraie
-repository for Robert Jirsaraie
+Repository for all my Computational Data Science PhD Projects
