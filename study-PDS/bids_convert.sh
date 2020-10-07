@@ -5,41 +5,84 @@ DIR_PROJECT=/scratch/rjirsara/study-PDS
 DIR_GITHUB=/scratch/rjirsara/RobertJirsaraie
 mkdir -p $DIR_PROJECT/dicoms $DIR_PROJECT/bids $DIR_PROJECT/audits
 
+###########################################################
+### Download Dicoms form the cnda for the first 3 Waves ###
+###########################################################
+
+SCRIPT_CNDA=${DIR_GITHUB}/toolbox/dicom_management/cnda_download.sh
+
+if [[ -f $SCRIPT_CNDA ]] ; then
+	for ZIP in `echo 101811` ; do
+		ZIP_DOWNLOAD=`echo ${USER}-$(date "+%Y%m%d")_${ZIP}`
+		echo ""
+		echo "############################################################"
+		echo "Submitting Download Job ${ZIP_DOWNLOAD} To Aggregate Dicoms "
+		echo "############################################################"
+	 	cat $SCRIPT_CNDA | \
+			sed s@'$1'@"${DIR_PROJECT}/dicoms"@g | \
+			sed s@'$2'@"${ZIP_DOWNLOAD}"@g > ${ZIP_DOWNLOAD}.sh
+		qsub -N 'CNDA' ${ZIP_DOWNLOAD}.sh ; rm ${ZIP_DOWNLOAD}.sh
+	done
+fi
+
 ##############################################
 ### Convert dcm2bids for the first 3 Waves ###
 ##############################################
 
 SCRIPT_DCM2BIDS=${DIR_GITHUB}/toolbox/dicom_management/bids_convertDCM.sh
-FILE_CONFIG=${DIR_GITHUB}/study-PDS/bids_config_waves123.json
+FILE_CONFIG=${DIR_GITHUB}/study-PDS/bids_config123.json
 OPT_LONGITUDINAL=sub_ses
 OPT_RM_DICOMS=TRUE
 
 if [[ -f $SCRIPT_DCM2BIDS && -f $FILE_CONFIG ]] ; then
-	echo ""
-	echo "⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡"
-	echo "Coverting Data into BIDs Format - dcm2bids "
-	echo "⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡"
-	SUBJECTS=`echo $DIR_PROJECT/dicoms/* | sed s@"$DIR_PROJECT/dicoms/"@''@g`
-	for SUB in `echo $SUBJECTS | tr ' ' '\n' | cut -d '_' -f2 | sed s@'L'@@g | sort | uniq` ; do
-		INDEX=0
-		for SES in $DIR_PROJECT/dicoms/*L${SUB} ; do
-			INDEX=$(($INDEX+1))
-			mv $SES `echo ${SES}_${INDEX} | cut -d 'L' -f2`
-			mkdir ${SES}_${INDEX}/dicoms
-			mv ${SES}_${INDEX}/* ${SES}_${INDEX}/dicoms
+	if [[ -d `echo $DIR_PROJECT/dicoms/* | tr ' ' '\n' | grep _L | head -n1` ]] ; then
+		SUBJECTS=`echo $DIR_PROJECT/dicoms/* | sed s@"$DIR_PROJECT/dicoms/"@''@g`
+		for SUB in `echo $SUBJECTS | tr ' ' '\n' | cut -d '_' -f2 | sed s@'L'@@g | sort | uniq` ; do
+			INDEX=0
+			for SES in $DIR_PROJECT/dicoms/*L${SUB} ; do
+				INDEX=$(($INDEX+1))
+				mv $SES `echo ${SES}_${INDEX} | cut -d 'L' -f2`
+				mkdir ${SES}_${INDEX}/dicoms
+				mv ${SES}_${INDEX}/* ${SES}_${INDEX}/dicoms
+			done
 		done
-	done
-	${SCRIPT_DCM2BIDS} ${FILE_CONFIG} ${DIR_PROJECT}/dicoms ${OPT_LONGITUDINAL} ${OPT_RM_DICOMS}
+	fi
+	for DIR_SUBJECT in `echo ${DIR_PROJECT}/dicoms/*/dicoms | tr ' ' '\n' | sed s@"/dicoms$"@""@g` ; do
+		JOBNAME=`echo BIDS_$(basename ${DIR_SUBJECT})| cut -c1-10`
+		JOBSTATUS=`qstat -u $USER | grep "${JOBNAME}\b" | awk {'print $10'}`
+		if [ -d $DIR_SUBJECT/sub-* ] ; then
+			echo ""
+			echo "#######################################"
+			echo "#${JOBNAME} has already been processed "
+			echo "#######################################"
+		elif [[ ! -z "$JOBSTATUS" &&  $JOBSTATUS != 'C' ]] ; then 
+			echo ""
+			echo "#######################################################"
+			echo "#${JOBNAME} Is Currently Being Processed: ${JOBSTATUS} "
+			echo "#######################################################"
+		else
+			echo ""
+			echo "##################################################"
+			echo "Submitting DCM2BIDS Job ${JOBNAME} For Converting "
+			echo "##################################################"
+			cat ${SCRIPT_DCM2BIDS} | \
+				sed s@'$1$'@"${DIR_SUBJECT}"@g | \
+				sed s@'$2$'@"${FILE_CONFIG}"@g | \
+				sed s@'$3$'@"${OPT_LONGITUDINAL}"@g | \
+				sed s@'$4$'@"${OPT_RM_DICOMS}"@g > $DIR_SUBJECT/bids_convertDCM.sh
+			qsub -N ${JOBNAME} $DIR_SUBJECT/bids_convertDCM.sh
+		fi
+	done	
 fi
 
 ########################################################
 ### Modify MetaData to Adhere to BIDS Specifications ###
 ########################################################
 
-SCRIPT_EDIT_META=${DIR_GITHUB}/dicom_management/bids_conversion/MetaData_Modification.py
+SCRIPT_EDIT_META=${DIR_GITHUB}/toolbox/dicom_management/bids_modifyMETA.py
 OPT_GEN_FMAP_FUNC=FALSE
 OPT_GEN_FMAP_DWI=FALSE
-OPT_ADD_DEFAULT_ST=TRUE
+OPT_ADD_DEFAULT_ST=FALSE
 
 if [[ -f $SCRIPT_EDIT_META ]] ; then
 	echo ""
@@ -49,6 +92,7 @@ if [[ -f $SCRIPT_EDIT_META ]] ; then
 	python $SCRIPT_EDIT_META $DIR_PROJECT $OPT_GEN_FMAP_FUNC $OPT_GEN_FMAP_DWI $OPT_ADD_DEFAULT_ST
 fi
 
+<<SKIP
 #######################################
 ### Generate BIDS Validation Report ###
 #######################################
@@ -63,39 +107,7 @@ if [[ -f $SCRIPT_GEN_REPORT ]] ; then
 	$SCRIPT_GEN_REPORT $DIR_PROJECT
 fi
 
-#################################
-### Upload Events To Flywheel ###
-#################################
-
-SCRIPT_FW_UPLOAD=${DIR_GITHUB}/dicom_management/flywheel/Flywheel_Upload.sh
-DIR_FLYWHEEL=yassalab/Conte-Two-UCI
-DIRNAMExTYPE="DICOMSxdicom PARRECxparrec NIFTIxfolder"
-
-if [[ -f $SCRIPT_FW_UPLOAD ]] ; then
-	echo ""
-	echo "⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  "
-	echo "Uploading Events To Subject-Level Directories In Flyweel "
-	echo "⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  "
-	$SCRIPT_FW_UPLOAD $DIR_PROJECT $DIR_FLYWHEEL $DIRNAMExTYPE $FLYWHEEL_API_TOKEN
-fi
-
-########################################
-### Uploading Processed Data To Zion ###
-########################################
-
-SCRIPT_ZION_UPLOAD=${DIR_GITHUB}/dicom_management/zion/Zion_Upload.exp
-DIR_HPC=${DIR_PROJECT}/bids
-DIR_ZION=/tmp/yassamri/Conte_Center/Processed_Data/rjirara
-ZION_USERNAME=`whoami`
-
-if [[ -f $SCRIPT_ZION_UPLOAD && ! -z $DIR_ZION && ! -z $ZION_PASSWORD ]] ; then
-	echo ""
-	echo "⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  "
-	echo "Uploading Processed Data To Zion "
-	echo "⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  #  ⚡  "
-	$SCRIPT_ZION_UPLOAD $DIR_HPC $DIR_ZION $ZION_USERNAME $ZION_PASSWORD
-fi
-
+SKIP
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
-######         ⚡     ⚡    ⚡   ⚡   ⚡   ⚡  ⚡  ⚡  ⚡    ⚡  ⚡  ⚡  ⚡   ⚡   ⚡   ⚡    ⚡     ⚡       ######
+####           ⚡     ⚡    ⚡   ⚡   ⚡   ⚡  ⚡  ⚡  ⚡    ⚡  ⚡  ⚡  ⚡   ⚡   ⚡   ⚡    ⚡     ⚡         ####
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
