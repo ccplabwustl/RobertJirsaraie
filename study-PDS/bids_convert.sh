@@ -12,7 +12,7 @@ mkdir -p $DIR_PROJECT/dicoms $DIR_PROJECT/bids $DIR_PROJECT/audits
 SCRIPT_CNDA=${DIR_GITHUB}/toolbox/dicom_management/cnda_download.sh
 
 if [[ -f $SCRIPT_CNDA ]] ; then
-	for ZIP in `echo 101811` ; do
+	for ZIP in `echo 105046` ; do
 		ZIP_DOWNLOAD=`echo ${USER}-$(date "+%Y%m%d")_${ZIP}`
 		echo ""
 		echo "############################################################"
