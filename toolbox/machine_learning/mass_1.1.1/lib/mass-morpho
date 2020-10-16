@@ -1,0 +1,437 @@
+#!/bin/bash
+
+. /scratch/shawnfan/structural_processing/mass_1.1.1/lib/bash/mass/mass-functions.sh || { echo "Failed to source MASS functions!" 1>&2; exit 1; }
+
+################################################ VERSION INFO ################################################
+# $Id: Morpho.sh 170 2013-09-20 14:44:15Z hsiehm@UPHS.PENNHEALTH.PRV $
+#
+version()
+{
+	# Display the version number and date of modification extracted from
+	# the Id variable.
+	SVNversion="$Id: Morpho.sh 170 2013-09-20 14:44:15Z hsiehm@UPHS.PENNHEALTH.PRV $"
+	Auth="Jimit Doshi"
+	ver="$Rev: 170 $"
+	mod="$LastChangedDate: 2013-09-20 10:44:15 -0400 (Fri, 20 Sep 2013) $"
+	echo -e "Author			: $Auth"
+	echo -e "Revision		$ver"
+	echo -e "Last Modification	$mod"
+#	echo -e "$0 version \c"
+#	echo $SVNversion|cut -f3,4,5 -d" "
+	exit 5
+}
+
+################################################ FUNCTIONS ################################################
+
+help()
+{
+cat <<HELP
+
+This script does the following:
+
+	This script performs the dilation, erosion, opening or closing operations on a given binary mask
+
+##############################################
+USAGE :	$0 [OPTIONS]
+OPTIONS:
+
+Required:	-in	   < path >	absolute path of the input file to be dilated
+
+Operation:	-dilate			Perform a dilation operation using a Gaussian sphere
+					(output prefix: input_dil\${kernel}mm)
+		-erode			Perform an erosion operation using a Gaussian sphere
+					(output prefix: input_ero\${kernel}mm)
+		-open			Perform an opening operation using a Gaussian sphere
+					(output prefix: input_open\${kernel}mm)
+		-close			Perform a closing operation using a Gaussian sphere
+					(output prefix: input_close\${kernel}mm)
+
+Optional:	-dest	   < path >	absolute path to the destination where the results are to be stored
+					(default: same as input)
+		-tmp	   < path >	absolute path to the temporary directory
+		-kernel	   < int >	Gaussian kernel sphere radius in mm (default: 2)
+		-v	   		verbose output (default: 0 - no output)
+		-V			Version Information
+
+
+ERROR: Not enough arguments!!
+##############################################
+
+DEPENDENCIES:
+	3dcalc		: `which 3dcalc`
+	3dBrickStat	: `which 3dBrickStat`
+	nifti1_test	: `which nifti1_test`
+	3dLocalstat	: `which 3dLocalstat`
+
+HELP
+exit 1
+}
+
+cleanUpandExit()
+{
+	echo -e ":o:o:o:o:o Aborting Operations .... \n\n"
+
+	if [ -d "$TMP" ]
+	then
+		rm -rfv ${TMP}*
+	fi
+
+	exit 1
+}
+
+parse()
+{
+	while [ -n "$1" ]; do
+		case $1 in
+			-h)
+				help;
+				shift 1;;			# help is called
+		     	-in)
+				input=$2;
+
+				checkFile $input
+
+				temp=`FileAtt $input`
+				InExt=`echo $temp | awk '{ print $1 }'`
+				InbName=`echo $temp | awk '{ print $2 }'`
+				InDir=`echo $temp | awk '{ print $3 }'`
+
+				input=${InDir}/${InbName}.${InExt}
+
+				shift 2;;			# SubID is set
+			-dest)
+				dest=`checkPath $2`;
+				shift 2;;			# source path is set
+			-tmp)
+				tmpDirToUse=`checkPath $2`;
+				shift 2;;			# source path is set
+			-kernel)
+				kernel=$2;
+				shift 2;;			# source path is set
+			-dilate)
+				dil=1;
+				shift 1;;			# source path is set
+			-erode)
+				ero=1;
+				shift 1;;			# source path is set
+			-open)
+				open=1;
+				shift 1;;			# source path is set
+			-close)
+				close=1;
+				shift 1;;			# source path is set
+			-v)
+				verbose=1;
+				shift 1;;			# source path is set
+			-V)
+				version;
+				shift 1;;			# source path is set
+			-*)
+				echo "ERROR: no such option $1";
+				help;;
+			 *)
+				break;;
+		esac
+	done
+}
+
+import()
+{
+	ext=$1
+	inFile=$2
+	outFile=$3
+
+	if [ "${ext}" == "nii.gz" ]
+	then
+		if [ "$verbose" == "1" ]
+		then
+			cp -v ${inFile} ${outFile}.nii.gz
+		else
+			cp ${inFile} ${outFile}.nii.gz
+		fi
+	elif [ "${ext}" == "nii" ]
+	then
+		echoV "nifti1_test -zn1 ${inFile} ${outFile}"
+		nifti1_test -zn1 ${inFile} ${outFile}
+	elif [ "${ext}" == "hdr" ]
+	then
+		echoV "nifti1_test -zn1 ${inFile%.hdr}.img ${outFile}"
+		nifti1_test -zn1 ${inFile%.hdr}.img ${outFile}
+	elif [ "${ext}" == "img" ]
+	then
+		echoV "nifti1_test -zn1 ${inFile} ${outFile}"
+		nifti1_test -zn1 ${inFile} ${outFile}
+	fi
+}
+
+dilate()
+{
+	in=$1
+	out=$2
+
+
+	### Dilating the mask
+	echoV "\n----->	Dilating the mask ...\n"
+	echoV "3dLocalstat \n
+	 -nbhd 'SPHERE($kernel)' \n
+	 -stat 'sum' \n
+	 -prefix dilate.nii.gz \n
+	 ${in};"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dLocalstat \
+		 -nbhd "SPHERE($kernel)" \
+		 -stat 'sum' \
+		 -prefix dilate.nii.gz \
+		 ${in};
+	else
+		3dLocalstat \
+		 -nbhd "SPHERE($kernel)" \
+		 -stat 'sum' \
+		 -prefix dilate.nii.gz \
+		 ${in} >> DilateErode.log 2>&1
+	fi
+
+	echoV "\n3dcalc \n
+	 -a dilate.nii.gz \n
+	 -expr 'step(a)' \n
+	 -prefix ${out} \n
+	 -verbose;"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dcalc \
+		 -a dilate.nii.gz \
+		 -expr "step(a)" \
+		 -prefix ${out} \
+		 -verbose;
+	else
+		3dcalc \
+		 -a dilate.nii.gz \
+		 -expr "step(a)" \
+		 -prefix ${out} \
+		 -verbose >> DilateErode.log 2>&1
+	fi
+
+	checkExitCode $? "\nERROR: Dilation of the input image failed!!!"
+
+	if [ "$verbose" == "1" ]
+	then
+		rm -fv dilate.nii.gz
+	else
+		rm -f dilate.nii.gz
+	fi
+
+}
+
+erode()
+{
+	in=$1
+	out=$2
+
+	### Eroding the thresholded mask
+	echoV "\n----->	Eroding the thresholded mask ...\n"
+	echoV "3dLocalstat \n
+	 -nbhd 'SPHERE($kernel)' \n
+	 -stat 'sum' \n
+	 -prefix erode.nii.gz \n
+	 ${in};"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dLocalstat \
+		 -nbhd "SPHERE($kernel)" \
+		 -stat 'sum' \
+		 -prefix erode.nii.gz \
+		 ${in};
+	else
+		3dLocalstat \
+		 -nbhd "SPHERE($kernel)" \
+		 -stat 'sum' \
+		 -prefix erode.nii.gz \
+		 ${in} >> DilateErode.log 2>&1
+	fi
+
+	max=$(( `3dBrickStat -slow -max erode.nii.gz` - 1 ))
+
+	echoV "\n3dcalc \n
+	 -a erode.nii.gz \n
+	 -expr 'step(a-$max)' \n
+	 -prefix ${out} \n
+	 -verbose;"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dcalc \
+		 -a erode.nii.gz \
+		 -expr "step(a-$max)" \
+		 -prefix ${out} \
+		 -verbose;
+	else
+		3dcalc \
+		 -a erode.nii.gz \
+		 -expr "step(a-$max)" \
+		 -prefix ${out} \
+		 -verbose >> DilateErode.log 2>&1
+	fi
+	checkExitCode $? "\nERROR: Erosion of the input image failed!!!"
+
+	if [ "$verbose" == "1" ]
+	then
+		rm -fv erode.nii.gz
+	else
+		rm -f erode.nii.gz
+	fi
+
+}
+################################################ END OF FUNCTIONS ################################################
+
+################################################ MAIN BODY ################################################
+
+module load "AFNI-17.0.9";
+module load "dramms-1.5.1";
+module load "fsl-5.0.8";
+
+if [ $# -lt 1 ]; then
+	help
+fi
+
+### Timestamps
+startTime=`date +%F-%H:%M:%S`
+startTimeStamp=`date +%s`
+
+### Specifying the trap signal
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGHUP signal'" SIGHUP
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGINT signal'" SIGINT
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGTERM signal'" SIGTERM
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGKILL signal'" SIGKILL
+
+### Default parameters
+kernel=2
+verbose=0
+dil=0
+ero=0
+open=0
+close=0
+
+### Reading the arguments
+parse $*
+
+if [ `echo "scale=0; $dil + $ero + $open + $close" | bc` -gt 0 ]
+then
+	if [ ! -d $dest ]
+	then
+		if [ "$verbose" == "1" ]
+		then
+			mkdir -pv $dest
+		else
+			mkdir -p $dest
+		fi
+	fi
+else
+	checkExitCode 1 "\nERROR: No morphological operation selected!!!"
+fi
+
+echoV "\nRunning commands on		: `hostname`"
+echoV "Start time			: ${startTime}\n"
+
+### Check if all dependenices are satisfied
+checkDependency	3dcalc
+checkDependency	nifti1_test
+checkDependency	3dBrickStat
+checkDependency	3dLocalstat
+
+### Forming FileNames
+# TMP
+PID=$$
+
+### Creating temporary directory
+createTempDir mass-morpho $PID
+echoV "\n----->	Temporary local directory created at $TMP ..." 1
+
+### Checking for default parameters
+if [ -z $dest ]
+then
+	dest=`dirname $input`/
+	if [ "$dest" == "./" ]
+	then
+		dest=`pwd`/
+	fi
+fi
+
+### Importing data to the temporary directory
+echoV "\n----->	Importing required files to the temporary local directory ...\n"
+import ${InExt} ${input} ${TMP}${InbName}
+
+cd $TMP
+
+### Converting the Input image to a binary mask (if it is not already)
+echoV "\n----->	Converting the Input image to a binary mask (if it is not already) ...\n"
+echoV "\n--> 3dcalc \n
+	 -prefix ${TMP}${InbName}_mask.nii.gz \n
+	 -a ${TMP}${InbName}.nii.gz \n
+	 -expr 'step(a)' \n
+	 -verbose \n
+	 -nscale \n
+	 -byte;"
+
+if [ "$verbose" == "1" ]
+then
+	3dcalc \
+	 -prefix ${TMP}${InbName}_mask.nii.gz \
+	 -a ${TMP}${InbName}.nii.gz \
+	 -expr 'step(a)' \
+	 -verbose \
+	 -nscale \
+	 -byte;
+else
+	3dcalc \
+	 -prefix ${TMP}${InbName}_mask.nii.gz \
+	 -a ${TMP}${InbName}.nii.gz \
+	 -expr 'step(a)' \
+	 -nscale \
+	 -byte >> DilateErode.log 2>&1
+fi
+checkExitCode $? "\nERROR: Binarizing of the Input image failed!!!"
+
+### Performing the morphological operation
+if [ "$dil" == "1" ]
+then
+	dilate ${TMP}${InbName}_mask.nii.gz ${dest}${InbName}_dil${kernel}mm.nii.gz
+fi
+
+if [ "$ero" == "1" ]
+then
+	erode ${TMP}${InbName}_mask.nii.gz ${dest}${InbName}_ero${kernel}mm.nii.gz
+fi
+
+if [ "$open" == "1" ]
+then
+	erode ${TMP}${InbName}_mask.nii.gz ${TMP}${InbName}_ero${kernel}mm.nii.gz
+	dilate ${TMP}${InbName}_ero${kernel}mm.nii.gz ${dest}${InbName}_open${kernel}mm.nii.gz
+fi
+
+if [ "$close" == "1" ]
+then
+	dilate ${TMP}${InbName}_mask.nii.gz ${TMP}${InbName}_dil${kernel}mm.nii.gz
+	erode ${TMP}${InbName}_dil${kernel}mm.nii.gz ${dest}${InbName}_close${kernel}mm.nii.gz
+fi
+
+
+### Removing the remaining files
+echoV "\n----->	Removing some of the remaining files ...\n"
+
+if [ "$verbose" == "1" ]
+then
+	rm -fv ${TMP}*
+	rmdir -v $TMP
+else
+	rm -f ${TMP}*
+	rmdir $TMP
+fi
+
+### Execution Time
+executionTime
+
+################################################ END ################################################

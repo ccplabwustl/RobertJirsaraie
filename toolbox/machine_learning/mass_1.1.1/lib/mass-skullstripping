@@ -1,0 +1,873 @@
+#!/bin/bash
+
+. /scratch/shawnfan/structural_processing/mass_1.1.1/lib/bash/mass/mass-functions.sh || { echo "Failed to source MASS functions!" 1>&2; exit 1; }
+
+################################################ VERSION INFO ################################################
+# $Id: SkullStripping.sh 170 2013-09-20 14:44:15Z hsiehm@UPHS.PENNHEALTH.PRV $
+#
+version()
+{
+	# Display the version number and date of modification extracted from
+	# the Id variable.
+	SVNversion="$Id: SkullStripping.sh 170 2013-09-20 14:44:15Z hsiehm@UPHS.PENNHEALTH.PRV $"
+	Auth="Jimit Doshi"
+	ver="$Rev: 170 $"
+	mod="$LastChangedDate: 2013-09-20 10:44:15 -0400 (Fri, 20 Sep 2013) $"
+	echo -e "Author			: $Auth"
+	echo -e "Revision		$ver"
+	echo -e "Last Modification	$mod"
+#	echo -e "$0 version \c"
+#	echo $SVNversion|cut -f3,4,5 -d" "
+	exit 5
+}
+
+################################################ FUNCTIONS ################################################
+
+help()
+{
+cat <<HELP
+
+This script does the following:
+
+	This script does the post-processing for the Multi-Atlas Skull Stripping algorithm by
+	combining the different brain masks generated from multiple registrations using the
+	jacobian determinants of the deformations as weights.
+
+##############################################
+USAGE :	$0 [OPTIONS]
+OPTIONS:
+
+Reqd:	-in	   < path >	absolute path of the input file to be registered
+	-dest	   < path >	absolute path to the destination where the results are to be stored
+
+Opt:	-mask      < pattern >	Prefix of the output brain mask (default: input_brainmask)
+				Provide the filename without the extension or the path
+	-cbq	   < pattern >	Prefix of the output skull-stripped image (default: input_brain)
+	-agg	   < int >	aggresiveness of the skull-stripping and cerebellum removal.
+				0 < \$agg < 100 (default: 50)
+	-regs	   < int >	No. of templates to be used for registrations (default: 6)
+	-int	   < int >	keep intermediate files (default: 0-delete)
+	-jacRank   < 0/1 >	keep the Jacobian Ranked brain mask (default: 1-keep)
+	-smooth    < int >	Gaussian smoothing kernel size, in mm (default: 0mm)
+	-kernel    < int >	Spherical dilation kernel size, in mm (default: 2mm)
+	-v	   < 0/1 >	verbose output (default: 0 - no output)
+	-V			Version Information
+
+
+ERROR: Not enough arguments!!
+##############################################
+
+DEPENDENCIES:
+	3dcalc		: `which 3dcalc`
+	3dmerge		: `which 3dmerge`
+	3dMean		: `which 3dMean`
+	3dTsort		: `which 3dTsort`
+	3dBrickStat	: `which 3dBrickStat`
+	nifti1_test	: `which nifti1_test`
+	3dclust		: `which 3dclust`
+
+	fslmerge	: `which fslmerge`
+	fslsplit	: `which fslsplit`
+
+HELP
+exit 1
+}
+
+cleanUpandExit()
+{
+	echo -e ":o:o:o:o:o Aborting Operations .... \n\n"
+
+	if [ -d "$TMP" ]  # && [ "$int" == "0" ] # to debug
+	then
+		if [ "$TMP" != "$dest" ]
+		then
+			rm -rfv ${TMP}
+		else
+			for i in $list
+			do
+				rmV Template${i}${float}
+				rmV Template${i}${smoothed}
+				rmV Template${i}${MaskJRank}
+
+				rmV Template${i}${abs}
+				rmV Template${i}${JRanked}
+			done
+
+			rmV ${AllJac}
+			rmV ${AllJacRanked}
+
+			if [ "$jacRank" == 0 ]
+			then
+				rmV ${jacMask}
+			fi
+			rmV ${Sum_thresh}
+			rmV ${Sum_open}
+			rmV ${Sum_filled}
+			rmV ${Sum_clustered}
+
+			rmV ${InbName}.nii.gz
+			rmV ${TMP}Debug.log
+		fi
+	fi
+
+	executionTime
+
+	exit 1
+}
+
+parse()
+{
+	while [ -n "$1" ]; do
+		case $1 in
+			-h)
+				help;
+				shift 1;;			# help is called
+		     	-in)
+				input=$2;
+
+				checkFile $input
+				temp=`FileAtt $input`
+				InExt=`echo $temp | awk '{ print $1 }'`
+				InbName=`echo $temp | awk '{ print $2 }'`
+				InDir=`echo $temp | awk '{ print $3 }'`
+
+				input=${InDir}/${InbName}.${InExt}
+
+				shift 2;;			# SubID is set
+			-dest)
+				dest=`checkPath $2`;
+				shift 2;;			# source path is set
+			-tmp)
+				tmpDirToUse=`checkPath $2`;
+				shift 2;;			# source path is set
+			-regs)
+				regs=$2;
+				shift 2;;			# source path is set
+			-agg)
+				agg=$2;
+				shift 2;;			# source path is set
+			-smooth)
+				smooth=$2;
+				shift 2;;			# source path is set
+			-int)
+				int=$2;
+				shift 2;;			# source path is set
+			-jacRank)
+				jacRank=$2;
+				shift 2;;			# source path is set
+			-kernel)
+				kernel=$2;
+				shift 2;;			# source path is set
+			-v)
+				verbose=$2;
+				shift 2;;			# source path is set
+			-V)
+				version;
+				shift 1;;			# source path is set
+			-mask)
+				mask=$2;
+				shift 2;;			# source path is set
+			-cbq)
+				cbq=$2;
+				shift 2;;			# source path is set
+			-*)
+				echo "ERROR: no such option $1";
+				help;;
+			 *)
+				break;;
+		esac
+	done
+}
+
+import()
+{
+	ext=$1
+	inFile=$2
+	outFile=$3
+
+	if [ ! -f ${outFile}.nii.gz ]
+	then
+		if [ "${ext}" == "nii.gz" ] || [ "${ext}" == "nii" ] || [ "${ext}" == "img" ]
+		then
+			echoV "nifti1_test -zn1 ${inFile} ${outFile}"
+			nifti1_test -zn1 ${inFile} ${outFile}
+		elif [ "${ext}" == "hdr" ]
+		then
+			echoV "nifti1_test -zn1 ${inFile%.hdr}.img ${outFile}"
+			nifti1_test -zn1 ${inFile%.hdr}.img ${outFile}
+		fi
+	fi
+}
+
+################################################ END OF FUNCTIONS ################################################
+
+################################################ MAIN BODY ################################################
+
+module load "AFNI-17.0.9";
+module load "dramms-1.5.1";
+module load "fsl-5.0.8";
+
+if [ $# -lt 1 ]; then
+	help
+fi
+
+### Timestamps
+startTime=`date +%F-%H:%M:%S`
+startTimeStamp=`date +%s`
+
+echo -e "\nRunning commands on		: `hostname`"
+echo -e "Start time			: ${startTime}\n"
+
+### Default Parameters
+scripts=/scratch/shawnfan/structural_processing/mass_1.1.1/lib/
+agg=50
+regs=6
+int=0
+jacRank=1
+smooth=0
+verbose=0
+kernel=2
+
+### Specifying the trap signal
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGHUP signal'" SIGHUP
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGINT signal'" SIGINT
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGTERM signal'" SIGTERM
+trap "checkExitCode 1 '\nProgram Interrupted. Received SIGKILL signal'" SIGKILL
+
+### Reading the arguments
+echo -e "Parsing arguments		: $*"
+parse $*
+
+### Scripts and environment variables
+fillholes=${scripts}mass-fillHoles
+Morpho=${scripts}mass-morpho
+FSLOUTPUTTYPE=NIFTI_GZ; export $FSLOUTPUTTYPE
+
+### Check if all dependenices are satisfied
+checkDependency	3dcalc
+checkDependency	3dmerge
+checkDependency	nifti1_test
+checkDependency	3dMean
+checkDependency	3dTsort
+checkDependency	3dBrickStat
+checkDependency	3dclust
+
+checkDependency	fslmerge
+checkDependency	fslsplit
+
+### Forming FileNames
+# TMP
+PID=$$
+
+### Creating temporary directory
+createTempDir mass-skullstripping $PID
+echoV "\n----->	Temporary local directory created at $TMP ..." 1
+
+# Input Space Mask
+TemplateSpace=_mask.nii.gz
+InSpace=_mask_InSpace.nii.gz
+float=_mask_InSpace_float.nii.gz
+smoothed=_mask_InSpace_float_smoothed.nii.gz
+MaskJRank=_mask_InSpace_float_smoothed_ranked.nii.gz
+
+# Jacobians
+Jacobian=_affine_warp_jacobian.nii.gz
+abs=_affine_warp_jacobian_log10_abs.nii.gz
+JRanked=_affine_warp_jacobian_ranked.nii.gz
+
+# 4D Jacobians
+AllJac=AllJacobians.nii.gz
+AllJacRanked=AllJacobians_Ranked.nii.gz
+
+# Sum of Input Space Masks
+Sum_JRanked=Sum_allmasks_InSpace_float_smoothed_JacobianRanked.nii.gz
+Sum_thresh=Sum_allmasks_InSpace_float_smoothed_JacobianRanked_thresh.nii.gz
+Sum_open=Sum_allmasks_InSpace_float_smoothed_JacobianRanked_thresh_open${kernel}mm.nii.gz
+Sum_filled=Sum_allmasks_InSpace_float_smoothed_JacobianRanked_thresh_open${kernel}mm_filled.nii.gz
+Sum_clustered=Sum_allmasks_InSpace_float_smoothed_JacobianRanked_thresh_open${kernel}mm_filled_clustered.nii.gz
+
+# Output Images
+#mask=${InbName%.nii.gz}_cbq_mask.nii.gz
+#cbq=${InbName%.nii.gz}_str_cbq.nii.gz
+jacMask=${cbq}_JacRank.nii.gz
+
+if [ "$verbose" == "1" ]
+then
+	echo -e "\nINPUT FILES"
+	echo -e "\tInput Image			: ${input}"
+	echo -e "\tBrain mask in Input Space	: ${dest}${InbName}-Template*${InSpace}"
+	echo -e "\tBrain mask in Template Space	: ${dest}${InbName}-Template*${TemplateSpace}"
+	echo -e "\tJacobian maps in Input Space	: ${dest}${InbName}-Template*${Jacobian}"
+
+	echo -e "\nOUTPUT FILES"
+	echo -e "\tFinal Brain Mask in Input Space : ${dest}${mask}"
+	if [ ${jacRank} == "1" ]
+	then
+		echo -e "\tJacobian Weighted Brain Mask	: ${dest}${jacMask}"
+	fi
+	echo -e "\tFinal CBQ image			: ${dest}${cbq}"
+
+	echo -e "\nPARAMETERS"
+	echo -e "\tRetain intermediate files	: `if [ "$int" == "0" ]; then echo "NO"; else echo "YES"; fi`"
+	echo -e "\tAggression Factor		: $agg"
+	echo -e "\tDilation Kernel Size 		: ${kernel}mm"
+	echo -e "\tSmoothing Kernel Size 		: ${smooth}mm"
+fi
+
+### Importing data to the temporary directory
+echo -e "\n\n"
+echoV "----->	Importing required files to the temporary local directory ..." 1
+
+# Checking if all input files exist
+for (( i=1;i<=${regs};i++ ))
+do
+	checkFile ${dest}${InbName}-Template${i}${InSpace}
+	checkFile ${dest}${InbName}-Template${i}${Jacobian}
+	checkFile ${dest}${InbName}-Template${i}${TemplateSpace}
+done
+
+importlist=""
+for (( i=1;i<=${regs};i++ ))
+do
+	if [ -f ${dest}${InbName}-Template${i}${InSpace} ]
+	then
+		import nii.gz ${dest}${InbName}-Template${i}${InSpace} ${TMP}${InbName}-Template${i}${InSpace%.nii.gz}
+		import nii.gz ${dest}${InbName}-Template${i}${Jacobian} ${TMP}${InbName}-Template${i}${Jacobian%.nii.gz}
+		import nii.gz ${dest}${InbName}-Template${i}${TemplateSpace} ${TMP}${InbName}-Template${i}${TemplateSpace%.nii.gz}
+
+		if [ -z "$importlist" ]
+		then
+			importlist=$i
+		else
+			importlist="$importlist $i"
+		fi
+	fi
+done
+
+import ${InExt} ${input} ${TMP}${InbName}
+
+cd $TMP
+echo ""
+
+### Checking if the registrations worked properly
+for i in $importlist
+do
+	TempVol=`3dBrickStat -non-zero -slow -volume ${TMP}${InbName}-Template${i}${TemplateSpace}`
+	SubjVol=`3dBrickStat -non-zero -slow -volume ${TMP}${InbName}-Template${i}${InSpace}`
+
+	Ratio=`echo "scale=7; $SubjVol / $TempVol" | bc`
+
+
+	### This is added because 3dBrickStat gives a negative volume for an image with LAS orientation??!!
+	zero=0
+	if [ `echo "$Ratio < $zero" | bc` -eq 1 ]
+	then
+		Ratio=`echo "scale=7; -1 * $Ratio" | bc`
+	fi
+
+	lowerLimit=0.05
+	upperLimit=20
+
+
+	if [  `echo "$Ratio > $lowerLimit" | bc` -eq 1 ] && [ `echo "$Ratio < $upperLimit" | bc` -eq 1 ]
+	then
+		if [ -z "$list" ]
+		then
+			list=$i
+		else
+			list="$list $i"
+		fi
+	else
+		echoV "CAUTION: Excluding Template${i} as the registration is not accurate enough to be included! Head size ratio after and before registration is $Ratio" 1
+	fi
+done
+
+### Converting the Reference masks to float datatype
+echoV "----->	Converting the Reference masks to float datatype ..." 1
+for i in $list
+do
+	echoV "\n--> 3dcalc \n
+	 -prefix ${TMP}${InbName}-Template${i}${float} \n
+	 -a ${TMP}${InbName}-Template${i}${InSpace} \n
+	 -expr 'a' \n
+	 -float \n
+	 -nscale \n
+	 -verbose;"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dcalc \
+		 -prefix ${TMP}${InbName}-Template${i}${float} \
+		 -a ${TMP}${InbName}-Template${i}${InSpace} \
+		 -expr 'a' \
+		 -float \
+		 -nscale \
+		 -verbose;
+	else
+		3dcalc \
+		 -prefix ${TMP}${InbName}-Template${i}${float} \
+		 -a ${TMP}${InbName}-Template${i}${InSpace} \
+		 -expr 'a' \
+		 -float \
+		 -nscale \
+		 -verbose > ${TMP}Debug.log 2>&1;
+	fi
+	checkExitCode $? "\nERROR: Conversion to Float for Template${i} failed!!!"
+done
+
+### Smooting the Reference masks
+if [ "$smooth" != "0" ]
+then
+	echoV "----->	Smooting the Reference masks by $smooth mm ..." 1
+	for i in $list
+	do
+		echoV "\n--> 3dmerge \n
+		 -1blur_fwhm ${smooth} \n
+		 -datum float \n
+		 -prefix ${TMP}${InbName}-Template${i}${smoothed} \n
+		 ${TMP}${InbName}-Template${i}${float};"
+
+		3dmerge \
+		 -1blur_fwhm ${smooth} \
+		 -datum float \
+		 -prefix ${TMP}${InbName}-Template${i}${smoothed} \
+		 ${TMP}${InbName}-Template${i}${float} > ${TMP}Debug.log 2>&1;
+
+		checkExitCode $? "\nERROR: Smoothing for Template${i} failed!!!"
+	done
+else
+	echoV "----->	No smooting of the Reference masks requested ..." 1
+	for i in $list
+	do
+		cpV ${TMP}${InbName}-Template${i}${float} ${TMP}${InbName}-Template${i}${smoothed}
+	done
+fi
+
+### If there are any negative jacobians, make them extremely small: 0.01 * smallest positive jacobian value
+### Calculating the logarithm and absolute values of the Jacobians
+echoV "----->	Calculating the logarithm and absolute values of the Jacobians ..." 1
+for i in $list
+do
+	posmin=`3dBrickStat -slow -positive -min ${TMP}${InbName}-Template${i}${Jacobian}`
+	echoV "\n--> 3dcalc \n
+	 -verbose \n
+	 -prefix ${TMP}${InbName}-Template${i}${abs} \n
+	 -a ${TMP}${InbName}-Template${i}${Jacobian} \n
+	 -expr 'abs(log10(a*(1-isnegative(a))+0.01*${posmin% }*isnegative(a)))' \n
+	 -nscale \n
+	 -float;"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dcalc \
+		 -verbose \
+		 -prefix ${TMP}${InbName}-Template${i}${abs} \
+		 -a ${TMP}${InbName}-Template${i}${Jacobian} \
+		 -expr "abs(log10(a*(1-isnegative(a))+0.01*${posmin% }*isnegative(a)))" \
+		 -nscale \
+		 -float;
+	else
+		3dcalc \
+		 -verbose \
+		 -prefix ${TMP}${InbName}-Template${i}${abs} \
+		 -a ${TMP}${InbName}-Template${i}${Jacobian} \
+		 -expr "abs(log10(a*(1-isnegative(a))+0.01*${posmin% }*isnegative(a)))" \
+		 -nscale \
+		 -float > ${TMP}Debug.log 2>&1;
+	fi
+
+	checkExitCode $? "\nERROR: Calculation of logarithm and absolute values for Template${i} failed!!!"
+done
+
+### Creating a 4D dataset of the Log, Abs Jacabians
+echoV "----->	Creating a 4D dataset of the Log, Abs Jacabians ..." 1
+echoV "\n--> fslmerge \n
+ -t ${AllJac%.nii.gz} \n
+ `for i in $list; do ls ${TMP}${InbName}-Template${i}${abs}; done`;"
+
+fslmerge \
+ -t ${AllJac%.nii.gz} \
+ `for i in $list; do ls ${TMP}${InbName}-Template${i}${abs}; done` > ${TMP}Debug.log 2>&1;
+
+checkExitCode $? "\nERROR: Creation of 4D dataset failed!!!"
+
+### Sorting the Jacobians and assigning Ranks to each volume. Lower Jacobian -> Higher Rank
+echoV "----->	Sorting the Jacobians and assigning Ranks to each volume. Lower Jacobian -> Higher Rank ..." 1
+echoV "\n--> 3dTsort \n
+ -prefix ${AllJacRanked} \n
+ -dec \n
+ -rank ${AllJac};"
+
+3dTsort \
+ -prefix ${AllJacRanked} \
+ -dec \
+ -rank ${AllJac} > ${TMP}Debug.log 2>&1;
+
+checkExitCode $? "\nERROR: Sorting of Jacobian maps failed!!!"
+
+### Splitting the merged, sorted Jacobians
+echoV "----->	Splitting the merged, sorted Jacobians ..." 1
+echoV "\n--> fslsplit \n
+ ${AllJacRanked} \n
+ -t;"
+
+fslsplit \
+ ${AllJacRanked} \
+ -t > ${TMP}Debug.log 2>&1;
+
+checkExitCode $? "\nERROR: Splitting of 4D rank map failed!!!"
+
+### Converting to 1-file NIFTI
+echoV "----->	Renaming the split Jacobian Ranks ..." 1
+
+i=0
+for j in $list
+do
+	if [ $i -lt 10 ]
+	then
+		if [ "$verbose" == "1" ]
+		then
+			mv -v vol000${i}.nii.gz ${TMP}${InbName}-Template${j}${JRanked}
+		else
+			mv vol000${i}.nii.gz ${TMP}${InbName}-Template${j}${JRanked}
+		fi
+
+		i=`echo "scale=0; $i + 1" | bc`
+	else
+		if [ "$verbose" == "1" ]
+		then
+			mv -v vol00${i}.nii.gz ${TMP}${InbName}-Template${j}${JRanked}
+		else
+			mv vol00${i}.nii.gz ${TMP}${InbName}-Template${j}${JRanked}
+		fi
+
+		i=`echo "scale=0; $i + 1" | bc`
+	fi
+done
+
+### Multiplying the smoothed, reference masks with the Jacobian ranks
+echoV "----->	Multiplying the smoothed, reference masks with the Jacobian ranks ..." 1
+for i in $list
+do
+	echoV "\n--> 3dcalc \n
+	 -prefix ${TMP}${InbName}-Template${i}${MaskJRank} \n
+	 -a ${TMP}${InbName}-Template${i}${smoothed} \n
+	 -b ${TMP}${InbName}-Template${i}${JRanked} \n
+	 -expr 'a*b' \n
+	 -nscale \n
+	 -float\n
+	 -verbose;"
+
+	if [ "$verbose" == "1" ]
+	then
+		3dcalc \
+		 -prefix ${TMP}${InbName}-Template${i}${MaskJRank} \
+		 -a ${TMP}${InbName}-Template${i}${smoothed} \
+		 -b ${TMP}${InbName}-Template${i}${JRanked} \
+		 -expr 'a*b' \
+		 -nscale \
+		 -float \
+		 -verbose;
+	else
+		3dcalc \
+		 -prefix ${TMP}${InbName}-Template${i}${MaskJRank} \
+		 -a ${TMP}${InbName}-Template${i}${smoothed} \
+		 -b ${TMP}${InbName}-Template${i}${JRanked} \
+		 -expr 'a*b' \
+		 -nscale \
+		 -float \
+		 -verbose > ${TMP}Debug.log 2>&1;
+	fi
+
+	checkExitCode $? "\nERROR: Multiplication of smoothed, reference masks with Jacobian ranks for Template${i} failed!!!"
+done
+
+### Summing up the Jacobian Ranks within each reference mask
+echoV "----->	Summing up the Jacobian Ranks within each reference mask ..." 1
+echoV "\n--> 3dMean \n
+ -verbose \n
+ -prefix ${Sum_JRanked} \n
+ -datum float \n
+ -nscale \n
+ -sum `for i in $list; do ls ${TMP}${InbName}-Template${i}${MaskJRank}; done`;"
+
+
+if [ "$verbose" == "1" ]
+then
+	3dMean \
+	 -verbose \
+	 -prefix ${Sum_JRanked} \
+	 -datum float \
+	 -nscale \
+	 -sum `for i in $list; do ls ${TMP}${InbName}-Template${i}${MaskJRank}; done`;
+else
+	3dMean \
+	 -verbose \
+	 -prefix ${Sum_JRanked} \
+	 -datum float \
+	 -nscale \
+	 -sum `for i in $list; do ls ${TMP}${InbName}-Template${i}${MaskJRank}; done` > ${TMP}Debug.log 2>&1;
+fi
+
+checkExitCode $? "\nERROR: Summing up of Jacobian Ranks failed!!!"
+
+### Thresholding the Jacobian ranked reference masks
+max=`3dBrickStat -slow -max ${Sum_JRanked}`
+thresh=`echo "scale=7; $agg / 100 * ${max}" | bc`
+
+echoV "----->	Thresholding the Jacobian ranked reference masks at ${thresh} ..." 1
+
+echoV "\n--> 3dcalc \n
+ -prefix ${Sum_thresh} \n
+ -a ${Sum_JRanked} \n
+ -expr 'step(a-$thresh)' \n
+ -nscale \n
+ -byte \n
+ -verbose;"
+
+if [ "$verbose" == "1" ]
+then
+	3dcalc \
+	 -prefix ${Sum_thresh} \
+	 -a ${Sum_JRanked} \
+	 -expr "step(a-$thresh)" \
+	 -nscale \
+	 -byte \
+	 -verbose;
+else
+	3dcalc \
+	 -prefix ${Sum_thresh} \
+	 -a ${Sum_JRanked} \
+	 -expr "step(a-$thresh)" \
+	 -nscale \
+	 -byte \
+	 -verbose > ${TMP}Debug.log 2>&1;
+fi
+
+checkExitCode $? "\nERROR: Thresholding of Jacobian Ranks failed!!!"
+
+### Opening the thresholded mask
+if [ "$kernel" != 0 ]
+then
+	echoV "----->	Opening the thresholded mask ..." 1
+	echoV "${Morpho} \n
+	 -in ${Sum_thresh} \n
+	 -open \n
+	 -dest $TMP \n
+	 -kernel $kernel \n
+	 -v;"
+
+	if [ "$verbose" == "1" ]
+	then
+		${Morpho} \
+		 -in ${Sum_thresh} \
+		 -open \
+		 -dest $TMP \
+		 -kernel $kernel \
+		 -v;
+	else
+		${Morpho} \
+		 -in ${Sum_thresh} \
+		 -open \
+		 -dest $TMP \
+		 -kernel $kernel \
+		 -v > ${TMP}Debug.log 2>&1;
+	fi
+
+	checkExitCode $? "\nERROR: Opening of the thresholded mask failed!!!"
+else
+	echoV "----->	No opening of the thresholded mask requested ..."
+	if [ "$verbose" == "1" ]
+	then
+		cp -v ${Sum_thresh} ${Sum_open}
+	else
+		cp ${Sum_thresh} ${Sum_open}
+	fi
+fi
+
+### Filling holes
+echoV "----->	Filling holes in the final brain mask ..." 1
+echoV "\n--> ${fillholes} \n
+	 -in ${Sum_open} \n
+	 -dest $TMP \n
+	 -v;"
+
+if [ "$verbose" == "1" ]
+then
+	${fillholes} \
+	 -in ${Sum_open} \
+	 -dest $TMP \
+	 -v;
+else
+	${fillholes} \
+	 -in ${Sum_open} \
+	 -dest $TMP \
+	 -v > ${TMP}Debug.log 2>&1;
+fi
+checkExitCode $? "\nERROR: Hole Filling failed!!!"
+
+### Clustering the final mask to exclude small, isolated clusters
+echoV "----->	Clustering the final, threholded, eroded and dilated mask to remove small, isolated clusters ..."
+thresh=$(( `3dBrickStat -slow -non-zero -count ${Sum_filled}` / 2 ))
+
+echoV "\n--> 3dclust \n
+  -prefix ${Sum_clustered} \n
+  0 \n
+  ${thresh} \n
+  ${Sum_filled};"
+
+if [ "$verbose" == "1" ]
+then
+	3dclust \
+	 -prefix ${Sum_clustered} \
+	 0 \
+	 ${thresh} \
+	 ${Sum_filled};
+else
+	3dclust \
+	 -summarize \
+	 -quiet \
+	 -nosum \
+	 -prefix ${Sum_clustered} \
+	 0 \
+	 ${thresh} \
+	 ${Sum_filled} > ${TMP}Debug.log 2>&1;
+fi
+
+checkExitCode $? "\nERROR: Clustering failed!!!"
+
+### Renaming the final mask
+echoV "----->	Converting the final CBQ mask to byte and renaming the Jacobian ranked mask ..." 1
+echoV "\n--> 3dcalc \n
+ -a ${Sum_clustered} \n
+ -prefix ${mask}.nii.gz \n
+ -expr a \n
+ -verbose \n
+ -nscale \n
+ -byte;"
+
+if [ "$verbose" == "1" ]
+then
+	3dcalc \
+	 -a ${Sum_clustered} \
+	 -prefix ${mask}.nii.gz \
+	 -expr a \
+	 -verbose \
+	 -nscale \
+	 -byte;
+
+	checkExitCode $? "\nERROR: Conversion to byte failed!!!"
+
+	mv -v ${Sum_JRanked} ${jacMask}
+else
+	3dcalc \
+	 -a ${Sum_clustered} \
+	 -prefix ${mask}.nii.gz \
+	 -expr a \
+	 -nscale \
+	 -byte > ${TMP}Debug.log 2>&1;
+
+	checkExitCode $? "\nERROR: Conversion to byte failed!!!"
+
+	mv ${Sum_JRanked} ${jacMask}
+fi
+
+### Removing the Skull and cerebellum
+echoV "----->	Removing the Skull and cerebellum ..." 1
+echoV "\n--> 3dcalc \n
+ -prefix ${cbq}.nii.gz \n
+ -a ${InbName}.nii.gz \n
+ -b ${mask}.nii.gz \n
+ -expr 'a*b' \n
+ -nscale \n
+ -verbose;"
+
+if [ "$verbose" == "1" ]
+then
+	3dcalc \
+	 -prefix ${cbq}.nii.gz \
+	 -a ${InbName}.nii.gz \
+	 -b ${mask}.nii.gz \
+	 -expr 'a*b' \
+	 -nscale \
+	 -verbose;
+else
+	3dcalc \
+	 -prefix ${cbq}.nii.gz \
+	 -a ${InbName}.nii.gz \
+	 -b ${mask}.nii.gz \
+	 -expr 'a*b' \
+	 -nscale > ${TMP}Debug.log 2>&1;
+fi
+
+checkExitCode $? "\nERROR: Masking out of skull and cerebellum failed!!!"
+
+### Removing the remaining files
+echoV "----->	Removing some of the remaining files ..." 1
+for i in $importlist
+do
+	rmV ${TMP}${InbName}-Template${i}${InSpace}
+	rmV ${TMP}${InbName}-Template${i}${Jacobian}
+	rmV ${TMP}${InbName}-Template${i}${TemplateSpace}
+done
+
+rmV ${TMP}${InbName}.nii.gz
+
+if [ "$int" == 0 ] || [ "$int" == 1 ]
+then
+	for i in $list
+	do
+		rmV ${TMP}${InbName}-Template${i}${float}
+		rmV ${TMP}${InbName}-Template${i}${smoothed}
+		rmV ${TMP}${InbName}-Template${i}${MaskJRank}
+
+		rmV ${TMP}${InbName}-Template${i}${abs}
+		rmV ${TMP}${InbName}-Template${i}${JRanked}
+	done
+
+	rmV ${AllJac}
+	rmV ${AllJacRanked}
+
+	if [ "$jacRank" == 0 ]
+	then
+		rmV ${jacMask}
+	fi
+	rmV ${Sum_thresh}
+	rmV ${Sum_open}
+	rmV ${Sum_filled}
+	rmV ${Sum_clustered}
+	rmV ${TMP}Debug.log
+fi
+
+### Transferring the results to the destination
+echoV "----->	Transferring the results to the destination ..." 1
+if [ ! -d $dest ]
+then
+	mkdirV $dest
+fi
+
+if [ "$verbose" == "1" ]
+then
+	mv -v ${TMP}* ${dest}
+	rmdir -v $TMP
+else
+	mv ${TMP}* ${dest}
+	rmdir $TMP
+fi
+
+### Removing temporary files from the destination
+if [ "$int" == 0 ]
+then
+	echoV "----->	Removing temporary files from the destination ..." 1
+	for i in $importlist
+	do
+		rmV ${dest}${InbName}-Template${i}${InSpace}
+		rmV ${dest}${InbName}-Template${i}${Jacobian}
+		rmV ${dest}${InbName}-Template${i}${TemplateSpace}
+	done
+fi
+
+### Execution Time
+executionTime
+
+################################################ END ################################################

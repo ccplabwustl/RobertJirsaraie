@@ -1,0 +1,157 @@
+#
+# @file  choosetemplate.m
+# @brief Apply k-means clustering to a set of images and returns the centroids of clusters
+#
+# Copyright (c) 2011-2014 University of Pennsylvania. All rights reserved.<br />
+# See http://www.cbica.upenn.edu/sbia/software/license.html or COPYING file.
+#
+# Contact: SBIA Group <sbia-software at uphs.upenn.edu>
+#
+
+
+
+#Usage 
+# ############################################ #
+# choosetemplate.py 5 /Path/To/Input/List.txt /Path/To/Destination/
+################################################
+# will choose 5 templates from the nifti images listed in 'List.txt' file
+#The list file must have full paths to the files or atleast paths relative to the executable
+
+
+
+
+
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
+from sklearn import datasets
+import nibabel as nib
+import numpy as np
+import sys
+import os
+
+print(str(sys.argv))
+
+NumClust=str(sys.argv[1])
+InputList=str(sys.argv[2])
+DestDir=str(sys.argv[3])
+MT=str(sys.argv[4])
+
+### Printing input arguments
+print('\n\n')
+print('Number of clusters :', NumClust)
+print('Subject Input List :', InputList)
+# print("Subject T2 list:", InputT2List)
+print('Destination Folder :', DestDir)
+print('Number of Threads  :', MT)
+print('\n\n')
+
+### Reading input file list
+f=open(InputList)
+lines = f.readlines()
+ctr=0
+
+# ### Reading input file T2 list
+# f=open(InputT2List)
+# t2_lines = f.readlines()
+
+# def creat_name_list(path_list):
+
+# 	name_list = list()
+# 	for path in path_list:
+# 		name = os.path.basename(path)
+# 		name_list.append(name)
+
+# 	return name_list
+
+# print(f"Length of t1 input path list: {len(lines)}")
+# t1_name_list = creat_name_list(lines)
+# print(f"Length of t1 input name list: {len(t1_name_list)}")
+
+# print(f"Length of t2 input path list: {len(t2_lines)}")
+# t2_name_list = creat_name_list(t2_lines)
+# print(f"Length of t2 input name list: {len(t2_name_list)}")
+
+# has_t2 = list()
+# for t1_name in t1_name_list:
+# 	if t1_name in t2_name_list:
+# 		has_t2.append(1)
+# 	else:
+# 		has_t2.append(0)
+# print(f"Length of t1-t2 match list: {len(has_t2)}")
+
+### Reading input images, getting their dimensions, vectorizing and downsampling them
+for line in lines:
+	ctr=ctr+1
+	print(line)
+	# Read image
+	img = nib.load(str.rstrip(line))
+	a=img.get_data()
+	# Get dimensions
+	print(a.shape)
+	# Vectorize
+	b=np.reshape(a,-1)
+	# Downsampling
+	b=b[1:-1:4]
+#	print b.shape
+	# Stacking all vectors into a matrix
+	if ctr==1:
+		c=b
+		print(c.shape)
+	else:
+		c=np.vstack((c,b))
+		print(c.shape)
+  
+
+### Run KMeans
+# km = KMeans(n_clusters=int(NumClust), init='random', max_iter=100, n_init=100,verbose=0,n_jobs=int(MT))
+km = KMeans(n_clusters=int(NumClust), init='random', max_iter=100, n_init=100,verbose=0)
+km.fit(c)
+km.labels_
+ctr=0
+
+# compute silhouette score for cluster 
+print(f"Calculating silhouette score...")
+print(f"X shape: {c.shape}")
+print(f"y shape: {km.labels_.shape}")
+sil_score = silhouette_score(X=c, labels=km.labels_, metric='euclidean', sample_size=None)
+print(f"Silhouette score: {sil_score}")
+db_score = davies_bouldin_score(X=c, labels=km.labels_)
+print(f"Davies-Boulding score: {db_score}")
+ch_score = calinski_harabasz_score(X=c, labels=km.labels_)
+print(f"Calinski_harabasz score: {ch_score}")
+
+### Find cluster centers
+center_list=list()
+for y in range(km.n_clusters):
+	print('\n')
+	print('Cluster : ', y)
+	c_dist=float("inf")
+	cluster_list=list()
+	print('------------')
+	for ctr in range(len(lines)):
+		if km.labels_[ctr]==y:
+			pre_c_dist=c_dist
+			c_dist=min(c_dist,np.linalg.norm(c[ctr,:]-km.cluster_centers_[y]))
+			if c_dist!=pre_c_dist:
+				center=lines[ctr]
+				cluster_list.append(lines[ctr])
+	print(cluster_list)     
+	cx=open(DestDir+"list"+str(y)+".txt","w")
+	for im in cluster_list:
+		cx.write(im)
+	cx.close() 
+	center_list.append(center)
+
+print('\n')
+print('Cluster Centers')
+print('---------------')
+print(center_list)
+print('\n')
+
+f = open(DestDir+"templatelist.txt", "w")
+for centers in center_list:
+	f.write(centers)
+f.write("silhouette: " + str(sil_score))
+f.write("davies-boulding: " + str(db_score))
+f.write("calinski-harabasz: " + str(ch_score))
+f.close()
