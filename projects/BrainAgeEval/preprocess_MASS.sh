@@ -11,58 +11,96 @@ source ~/ConfigEnv.sh
 STUDY_DIR=/scratch/rjirsara/study-PDS
 PROJECT_DIR=/scratch/rjirsara/projects/BrainAgeEval/DeepBrainNet
 SCRIPTS_DIR=/scratch/rjirsara/RobertJirsaraie/projects/BrainAgeEval
-module load "fsl-5.0.8" "dramms-1.5.1" "AFNI-17.0.9"
+module purge ; module load "fsl-5.0.8" "dramms-1.5.1" "AFNI-17.0.9"
+
+##########
+
+mkdir -p $PROJECT_DIR/mass_N4correct
+cat $SCRIPTS_DIR/mass_1.1.1/lib/mass-jobsubmit-PDS > $PROJECT_DIR/mass_N4correct/command.sh
+echo 'for RAW in `find $STUDY_DIR/bids/sub-*/ses-*/anat/*_T1w.nii.gz | grep -v run` ; do' >> $PROJECT_DIR/mass_N4correct/command.sh
+echo '	if [[ ! -f $(echo $PROJECT_DIR/mass_N4correct/`basename $RAW`) ]] ; then' >> $PROJECT_DIR/mass_N4correct/command.sh
+echo '		module purge ; module load "ANTs"' >> $PROJECT_DIR/mass_N4correct/command.sh
+echo '		N4BiasFieldCorrection -i $RAW -o $PROJECT_DIR/mass_N4correct/`basename $RAW`' >> $PROJECT_DIR/mass_N4correct/command.sh
+echo '	fi ' >> $PROJECT_DIR/mass_N4correct/command.sh
+echo 'done ' >> $PROJECT_DIR/mass_N4correct/command.sh
+echo '' >> $PROJECT_DIR/mass_N4correct/command.sh
+chmod -R ug+wrx $PROJECT_DIR/mass_N4correct
+qsub -N "N4CORRECT" $PROJECT_DIR/mass_N4correct/command.sh
 
 ####################################################################
 ### Create Study Specific Templates For Each of The Two Scanners ###
 ####################################################################
 
-COUNT=15
-cat $SCRIPTS_DIR/mass_1.1.1/lib/mass-jobsubmit-PDS > $PROJECT_DIR/command_kmeans.sh
-find $STUDY_DIR/bids/sub-*/ses-[1..2..3]/anat/*_T1w.nii.gz | \
-	grep -v run |  \
-	/bin/sort -R | \
-	head -n554 > $PROJECT_DIR/n554_kcohort123.lst
-echo "$SCRIPTS_DIR/mass_1.1.1/bin/mass-chooseTemplates \
-	-list $PROJECT_DIR/n554_kcohort123.lst \
-	-dest $PROJECT_DIR/ \
-	-tmp $PROJECT_DIR/ \
+COUNT=35
+ROOT_DIR=$PROJECT_DIR/mass_kclusters${COUNT} ; mkdir -p $ROOT_DIR
+cat $SCRIPTS_DIR/mass_1.1.1/lib/mass-jobsubmit-PDS > $ROOT_DIR/command.sh
+find $PROJECT_DIR/mass_N4correct/*.nii.gz > $ROOT_DIR/n837_kcohort.lst
+EXP=`cat $ROOT_DIR/n837_kcohort.lst | head -n1` 
+3dresample -dxyz 1.0 1.0 1.0 -input ${EXP} -prefix test.nii.gz ; mv test.nii.gz ${EXP}
+echo "EXP=$EXP" >> $ROOT_DIR/command.sh
+echo "COUNT=$COUNT" >> $ROOT_DIR/command.sh
+echo 'for FILE in `cat $ROOT_DIR/n837_kcohort.lst` ; do' >> $ROOT_DIR/command.sh
+echo 	'flirt -in $FILE -ref ${EXP} -out $FILE -applyxfm' >> $ROOT_DIR/command.sh
+echo 'done' >> $ROOT_DIR/command.sh
+echo "" >> $ROOT_DIR/command.sh
+echo '$SCRIPTS_DIR/bin/mass-chooseTemplates \
+	-list $ROOT_DIR/n837_kcohort.lst \
+	-dest $ROOT_DIR/ \
+	-tmp $ROOT_DIR/ \
 	-clust ${COUNT} \
-	-MT 8 -v" >> $PROJECT_DIR/command_kmeans.sh
-chmod ug+wrx $PROJECT_DIR/command_kmeans.sh
-qsub -N "MASSCLUST" $PROJECT_DIR/command_kmeans.sh
-rm $PROJECT_DIR/ChosenTemplates_*_metrics.txt ; mv $PROJECT_DIR/ChosenTemplates_*.txt $PROJECT_DIR/n${COUNT}_kclusters123.lst
+	-MT 8 -v' >> $ROOT_DIR/command.sh
+echo "" >> $ROOT_DIR/command.sh
+echo "" >> $ROOT_DIR/command.sh
+echo "chmod ug+wrx $ROOT_DIR/command.sh" >> $ROOT_DIR/command.sh
+echo "rm $ROOT_DIR/ChosenTemplates_*_metrics.txt" >> $ROOT_DIR/command.sh
+echo "mv $ROOT_DIR/ChosenTemplates_*.txt $ROOT_DIR/n${COUNT}_kclusters.lst" >> $ROOT_DIR/command.sh
+qsub -N "MASSCLUST" $ROOT_DIR/command.sh
+
 
 ##########
 
-for TEMPLATE in `cat $PROJECT_DIR/n${COUNT}_kclusters123.lst` ; do
-	TEMPLATE=/scratch/rjirsara/study-PDS/bids/sub-606/ses-2/anat/sub-606_ses-2_T1w.nii.gz
-	$SCRIPTS_DIR/mass_1.1.1/bin/mass -in ${TEMPLATE} -dest $PROJECT_DIR/mass_template123/run3/ -NOQ -MT 6 -regs 15 -int 2
-
--regs	  < int   >	No. of templates
- -int 2
+for TEMPLATE in `cat $PROJECT_DIR/mass_kclusters35/n35_kclusters.lst` ; do
+	$SCRIPTS_DIR/mass_1.1.1/bin/mass \
+		-in $PROJECT_DIR/mass_N4correct/`basename $TEMPLATE` \
+		-dest $PROJECT_DIR/mass_templates/ \
+		-regs 15 \
+		-agg 50 \
+		-int 0 \
+		-MT 6 
 done
 
+##########
 
-TEMPLATE=/scratch/rjirsara/study-PDS/bids/sub-404/ses-2/anat/sub-404_ses-2_T1w.nii.gz
+INDEX=0
+for SCAN in `ls $PROJECT_DIR/mass_templates/sub-*_ses-*_T1w.nii.gz` ; do
+	INDEX=$(($INDEX+1))
+	mv $SCAN $(dirname $SCAN)/Template${INDEX}.nii.gz
+done
+INDEX=0
+for SCAN in `ls $PROJECT_DIR/mass_templates/sub-*_ses-*_T1w_brainmask.nii.gz` ; do
+	INDEX=$(($INDEX+1))
+	mv $SCAN $(dirname $SCAN)/Template${INDEX}_str_cbq.nii.gz
+done
+INDEX=0
+for SCAN in `ls $PROJECT_DIR/mass_templates/sub-*_ses-*_T1w_brain.nii.gz` ; do
+	INDEX=$(($INDEX+1))
+	mv $SCAN $(dirname $SCAN)/Template${INDEX}_brain.nii.gz
+done
+rm `ls $PROJECT_DIR/mass_templates/* | grep -v /Template`
 
-$SCRIPTS_DIR/bin/mass -in ${TEMPLATE} -dest $PROJECT_DIR/mass_template123 -NOQ -MT 6
+######
 
-
-
-
-
-
-
-find $STUDY_DIR//bids/sub-*/ses-[4..5]/anat/*_T1w.nii.gz | \
-	grep -v run |  \
-	/bin/sort -R | \
-	head -n25 > $PROJECT_DIR/mass_template45/choosetemplate.lst
-COMMAND_FILE=`echo $PROJECT_DIR/mass_template123/command.sh`
-cat $SCRIPTS_DIR//lib/mass-jobsubmit > $COMMAND_FILE
-echo "$SCRIPTS_DIR/bin/mass-chooseTemplates -list $PROJECT_DIR/mass_template123/choosetemplate.lst -clust 15 -tmp $PROJECT_DIR/mass_template123 -MT 8 -v" >> $COMMAND_FILE
-chmod ug+wrx $COMMAND_FILE ; qsub $COMMAND_FILE
-
+mkdir -p $PROJECT_DIR/mass_skullstrip
+for RAW in `cat $ROOT_DIR/n837_kcohort.lst | head -n3` ; do
+	$SCRIPTS_DIR/mass_1.1.1/bin/mass \
+		-in $RAW \
+		-ref $PROJECT_DIR/mass_templates \
+		-dest $PROJECT_DIR/mass_skullstrip \
+		-regs 20 \
+		-agg 50 \
+		-int 0 \
+		-MT 6 
+done
 
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
 ####           ⚡     ⚡    ⚡   ⚡   ⚡   ⚡  ⚡  ⚡  ⚡    ⚡  ⚡  ⚡  ⚡   ⚡   ⚡   ⚡    ⚡     ⚡         ####
