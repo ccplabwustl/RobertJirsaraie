@@ -21,6 +21,23 @@ DBNData<-read.csv(DBNPath) ; covaData<-merge(covaData,DBNData,by=c("sub","ses"),
 
 write.csv(covaData,paste0("/scratch/rjirsara/proj20-BrainAgeEval/Analysis/n",dim(covaData)[1],"_DataFreeze_",TODAY,".csv"),row.names=F)
 
+######
+### Append Euler Number to Latest DataFreeze
+######
+
+data<-read.csv("/scratch/rjirsara/proj20-BrainAgeEval/Analysis/n834_DataFreeze_20201212.csv")
+data$EulerNumber<-NA
+for (INDEX in 1:nrow(data)){
+	SUB<-data[INDEX,"sub"] ; SES<-data[INDEX,"ses"] ; if (nchar(SUB) == 2){ SUB=paste0("0",SUB)}
+	FILE<-paste0("/scratch/rjirsara/study-PDS/apps/freesurfer/sub-",SUB,"_ses-",SES,"/stats/avg.orig.nofix.euler")
+	if (file.exists(FILE)){ 
+		CONTENT<-read.table(FILE,header=F)
+		data[INDEX,"EulerNumber"]<-as.numeric(CONTENT[1])
+	}
+}
+
+write.csv(data,paste0("/scratch/rjirsara/proj20-BrainAgeEval/Analysis/n",dim(data)[1],"_DataFreeze_",TODAY,".csv"),row.names=F)
+
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
 ####           ⚡     ⚡    ⚡   ⚡   ⚡   ⚡  ⚡  ⚡  ⚡    ⚡  ⚡  ⚡  ⚡   ⚡   ⚡   ⚡    ⚡     ⚡         ####
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
