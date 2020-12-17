@@ -30,23 +30,11 @@ fi
 ##############################################
 
 SCRIPT_DCM2BIDS=${DIR_GITHUB}/toolbox/dicom_management/bids_convertDCM.sh
-FILE_CONFIG=${DIR_GITHUB}/study-PDS/bids_config123.json
+FILE_CONFIG=${DIR_GITHUB}/study-PDS/bids_config45.json
 OPT_LONGITUDINAL=sub_ses
-OPT_RM_DICOMS=TRUE
+OPT_RM_DICOMS=FALSE
 
 if [[ -f $SCRIPT_DCM2BIDS && -f $FILE_CONFIG ]] ; then
-	if [[ -d `echo $DIR_PROJECT/dicoms/* | tr ' ' '\n' | grep _L | head -n1` ]] ; then
-		SUBJECTS=`echo $DIR_PROJECT/dicoms/* | sed s@"$DIR_PROJECT/dicoms/"@''@g`
-		for SUB in `echo $SUBJECTS | tr ' ' '\n' | cut -d '_' -f2 | sed s@'L'@@g | sort | uniq` ; do
-			INDEX=0
-			for SES in $DIR_PROJECT/dicoms/*L${SUB} ; do
-				INDEX=$(($INDEX+1))
-				mv $SES `echo ${SES}_${INDEX} | cut -d 'L' -f2`
-				mkdir ${SES}_${INDEX}/dicoms
-				mv ${SES}_${INDEX}/* ${SES}_${INDEX}/dicoms
-			done
-		done
-	fi
 	for DIR_SUBJECT in `echo ${DIR_PROJECT}/dicoms/*/dicoms | tr ' ' '\n' | sed s@"/dicoms$"@""@g` ; do
 		JOBNAME=`echo BIDS_$(basename ${DIR_SUBJECT})| cut -c1-10`
 		JOBSTATUS=`qstat -u $USER | grep "${JOBNAME}\b" | awk {'print $10'}`
@@ -92,7 +80,6 @@ if [[ -f $SCRIPT_EDIT_META ]] ; then
 	python $SCRIPT_EDIT_META $DIR_PROJECT $OPT_GEN_FMAP_FUNC $OPT_GEN_FMAP_DWI $OPT_ADD_DEFAULT_ST
 fi
 
-<<SKIP
 #######################################
 ### Generate BIDS Validation Report ###
 #######################################
@@ -107,7 +94,6 @@ if [[ -f $SCRIPT_GEN_REPORT ]] ; then
 	$SCRIPT_GEN_REPORT $DIR_PROJECT
 fi
 
-SKIP
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
 ####           ⚡     ⚡    ⚡   ⚡   ⚡   ⚡  ⚡  ⚡  ⚡    ⚡  ⚡  ⚡  ⚡   ⚡   ⚡   ⚡    ⚡     ⚡         ####
 ########⚡⚡⚡⚡⚡⚡#################################⚡⚡⚡⚡⚡⚡################################⚡⚡⚡⚡⚡⚡#######
