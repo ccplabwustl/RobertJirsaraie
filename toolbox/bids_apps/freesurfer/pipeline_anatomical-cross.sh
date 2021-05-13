@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #PBS -o /scratch/rjirsara/.submitted_jobs/${PBS_JOBNAME}.stdout
 #PBS -e /scratch/rjirsara/.submitted_jobs/${PBS_JOBNAME}.stderr
-#PBS -l nodes=1:ppn=4,mem=8gb,walltime=24:00:00
+#PBS -l nodes=1:ppn=8,mem=16gb,walltime=48:00:00
 #PBS -q dque
 #PBS -j oe 
 source ~/ConfigEnv.sh
@@ -10,7 +10,7 @@ source ~/ConfigEnv.sh
 STUDY_DIR=$1
 SUB=$2
 SES=$3
-module load "freesurfer-5.3.0"
+module purge ; module load "freesurfer-5.3.0"
 
 #########
 ### Process Cross-sectional Data To Get Base Subject-Specific Templates
