@@ -1,2 +1,3 @@
 *.nii.gz
 *.simg
+*.h5
