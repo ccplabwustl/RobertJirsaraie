@@ -1,20 +1,17 @@
 # RobertJirsaraie
-Repository for all my Computational Data Science PhD Projects
+Repository containing the code for every project through my PhD in Computational & Data Sciences
 
 ### 1. proj20-BrainAgeEval (1st Ph.D. Project)
 
-##### Benchmarking the Generalizability of Brain Age Models: Challenges Posed by Scanner Variance and Prediction Bias
-##### Under Review @ Human Brain Mapping
+##### Benchmarking the Generalizability of Brain Age Models: Challenges Posed by Scanner Variance and Prediction Bias. Under Review @ Human Brain Mapping
 
 #### 2. proj21-DivergeReview (2nd Ph.D. Project)
 
-##### A Systematic Review of Multimodal Brain Age Studies: Uncovering a Divergence Between Model Accuracy and Utility
-##### Under Review @ Neuroscience and BioBehavioral Reviews
+##### A Systematic Review of Multimodal Brain Age Studies: Uncovering a Divergence Between Model Accuracy and Utility. Under Review @ Neuroscience and BioBehavioral Reviews
 
 #### 3. proj22-NeuroMap (3rd Ph.D. Project)
 
-##### Mapping the Neurodevelopmental Biomarkers of Psychopathology
-##### In Development.
+##### Mapping the Neurodevelopmental Biomarkers of Psychopathology. In Development
 
 ### toolbox
 
