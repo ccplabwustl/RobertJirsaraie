@@ -1,9 +1,9 @@
 # RobertJirsaraie
 Repository for all my Computational Data Science PhD Projects
 
-##### proj20-BrainAgeEval (1st Ph.D. Project)
+### __proj20-BrainAgeEval (1st Ph.D. Project)__
 
-Benchmarking the Generalizability of Brain Age Models: Challenges Posed by Scanner Variance and Prediction Bias
+##### Benchmarking the Generalizability of Brain Age Models: Challenges Posed by Scanner Variance and Prediction Bias
 Under Review @ Human Brain Mapping
 
 #### proj21-DivergeReview (2nd Ph.D. Project)
